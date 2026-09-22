@@ -122,6 +122,9 @@ class SecurityValidator:
             raise ComplianceViolationError(summary_msg, blocking_violations)
 
         passed_count = len(results.get("passed_checks", []))
+        if passed_count == 0 and isinstance(scan_data, dict):
+            passed_count = scan_data.get("summary", {}).get("passed", 0)
+
         return {
             "status": "passed",
             "checks_passed": passed_count,
