@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "Resilient Azure IaC and Configuration Generator for multi-tier Terraform and Ansible"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
     { name = "FreeFades2Black", email = "free@local.omarchy" }
 ]
@@ -32,8 +32,12 @@ dev = [
 [project.scripts]
 azure-iac-gen = "app.cli:cli"
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
 pythonpath = ["."]
+
