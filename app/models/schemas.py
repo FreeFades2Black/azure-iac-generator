@@ -94,6 +94,8 @@ class BuildResponse(BaseModel):
     manifest: list[str] = Field(default_factory=list)
     validation_passed: bool = True
     validation_details: list[str] = Field(default_factory=list)
+    compliance_scan: dict | None = None
+
 
 
 class PublishResponse(BaseModel):

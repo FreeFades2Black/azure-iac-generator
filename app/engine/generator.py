@@ -133,6 +133,12 @@ def render_and_validate(
     return temp_dir
 
 
+def render_artifacts(request: InfrastructureBuildRequest, target_dir: str | None = None) -> str:
+    """Render templates into isolated directory without executing quality gate validations."""
+    return render_and_validate(request, target_dir=target_dir, run_validation=False)
+
+
 def _run_linter(cmd: list[str], err_msg: str):
     """Backwards-compatible linter execution helper."""
     run_linter(cmd, err_msg)
+

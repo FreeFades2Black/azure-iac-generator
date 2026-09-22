@@ -1,0 +1,24 @@
+# Enforce CIS Azure Foundations rules and high/critical severity blocks
+framework:
+  - terraform
+
+# Target CIS Azure rules and suppress external noise
+check:
+  - CKV_AZURE_1   # Storage accounts should use HTTPS only
+  - CKV_AZURE_3   # Storage accounts minimum TLS version 1.2
+  - CKV_AZURE_18  # Storage account default network access should be Deny
+  - CKV_AZURE_24  # Ensure Virtual Network subnets are configured with NSG
+  - CKV_AZURE_44  # Storage account shared access signature expiration
+  - CKV_AZURE_113 # Ensure Azure SQL Database transparent data encryption (TDE) is enabled
+  - CKV_AZURE_157 # Ensure Azure SQL server minimum TLS version is 1.2
+  - CKV_AZURE_212 # Ensure Azure SQL Database uses Azure AD authentication
+
+# Fail only on high/critical violations (Medium/Low can report as warnings)
+hard-fail-on:
+  - HIGH
+  - CRITICAL
+
+# Output configuration
+compact: true
+quiet: true
+output: json

@@ -11,8 +11,14 @@ from app.models.schemas import (
     PublishResponse,
     HealthResponse,
 )
-from app.engine.generator import render_and_validate
-from app.engine.validator import PipelineError, check_tool_availability, validate_artifacts
+from app.engine.generator import render_and_validate, render_artifacts
+from app.engine.validator import (
+    PipelineError,
+    ComplianceViolationError,
+    SecurityValidator,
+    check_tool_availability,
+    validate_artifacts,
+)
 from app.engine.git_publisher import push_to_github
 
 app = FastAPI(
@@ -26,6 +32,8 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+validator = SecurityValidator()
+
 # Enable CORS for local Omarchy dashboard/UI integrations
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +42,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(ComplianceViolationError)
+async def compliance_violation_handler(request, exc: ComplianceViolationError):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "status": "failed_compliance_gate",
+            "error": str(exc),
+            "violations": exc.violations,
+        },
+    )
 
 
 @app.exception_handler(PipelineError)
@@ -90,8 +110,11 @@ async def generate_iac(
         manifest.sort()
 
         validation_logs: list[str] = []
+        scan_results: dict | None = None
         if run_validation:
             validation_logs = validate_artifacts(build_dir, strict=strict_validation)
+            if validator.is_available:
+                scan_results = validator.scan_terraform_directory(os.path.join(build_dir, "terraform"))
 
         return BuildResponse(
             status="success",
@@ -103,8 +126,11 @@ async def generate_iac(
             output_dir=build_dir,
             manifest=manifest,
             validation_passed=True,
-            validation_details=validation_logs
+            validation_details=validation_logs,
+            compliance_scan=scan_results
         )
+    except ComplianceViolationError:
+        raise
     except PipelineError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
