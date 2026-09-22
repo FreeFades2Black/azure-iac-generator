@@ -1,0 +1,8 @@
+-- Entra ID External Provider User & Role Assignment
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = N'{{ app_msi_display_name }}')
+BEGIN
+    CREATE USER [{{ app_msi_display_name }}] FROM EXTERNAL PROVIDER;
+    ALTER ROLE db_datareader ADD MEMBER [{{ app_msi_display_name }}];
+    ALTER ROLE db_datawriter ADD MEMBER [{{ app_msi_display_name }}];
+    GRANT EXECUTE TO [{{ app_msi_display_name }}];
+END;

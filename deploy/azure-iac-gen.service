@@ -1,0 +1,17 @@
+[Unit]
+Description=Azure Resilient IaC Generator Service
+After=network.target
+
+[Service]
+Type=simple
+User=free
+WorkingDirectory=/home/free/projects/azure-iac-generator
+EnvironmentFile=/home/free/projects/azure-iac-generator/.env
+ExecStart=/home/free/projects/azure-iac-generator/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Azure IaC Generator
+GenericName=Infrastructure as Code Generator
+Comment=Generate Resilient Azure Terraform HCL & Ansible Playbooks
+Exec=xdg-open http://127.0.0.1:8080/docs
+Icon=network-server
+Terminal=false
+Categories=Development;System;Network;
+Keywords=Azure;IaC;Terraform;Ansible;DevOps;Omarchy;
+StartupNotify=true

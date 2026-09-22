@@ -1,0 +1,60 @@
+# --- Azure SQL Layer ---
+{% if enable_sql %}
+resource "azurerm_user_assigned_identity" "sql_admin_id" {
+  name                = "id-sql-admin-{{ project_name }}"
+  resource_group_name = azurerm_resource_group.rg_primary.name
+  location            = azurerm_resource_group.rg_primary.location
+}
+
+resource "azurerm_mssql_server" "sql_primary" {
+  name                = "sql-{{ project_name }}-prim"
+  resource_group_name = azurerm_resource_group.rg_primary.name
+  location            = azurerm_resource_group.rg_primary.location
+  version             = "12.0"
+  minimum_tls_version = "1.2"
+
+  azuread_administrator {
+    login_username = azurerm_user_assigned_identity.sql_admin_id.name
+    object_id      = azurerm_user_assigned_identity.sql_admin_id.principal_id
+  }
+}
+
+resource "azurerm_mssql_database" "db_primary" {
+  name           = "sqldb-{{ project_name }}"
+  server_id      = azurerm_mssql_server.sql_primary.id
+  sku_name       = "{{ sql_sku }}"
+  collation      = "SQL_Latin1_General_CP1_CI_AS"
+  max_size_gb    = 128
+  zone_redundant = {{ 'true' if (sql_redundancy != 'local' and sql_redundancy.value != 'local') else 'false' }}
+}
+
+{% if sql_redundancy == "failover_group" or sql_redundancy.value == "failover_group" %}
+resource "azurerm_mssql_server" "sql_secondary" {
+  name                = "sql-{{ project_name }}-sec"
+  resource_group_name = azurerm_resource_group.rg_secondary.name
+  location            = azurerm_resource_group.rg_secondary.location
+  version             = "12.0"
+  minimum_tls_version = "1.2"
+
+  azuread_administrator {
+    login_username = azurerm_user_assigned_identity.sql_admin_id.name
+    object_id      = azurerm_user_assigned_identity.sql_admin_id.principal_id
+  }
+}
+
+resource "azurerm_mssql_failover_group" "sql_fog" {
+  name      = "fog-{{ project_name }}"
+  server_id = azurerm_mssql_server.sql_primary.id
+  databases = [azurerm_mssql_database.db_primary.id]
+
+  partner_server {
+    id = azurerm_mssql_server.sql_secondary.id
+  }
+
+  read_write_endpoint_failover_policy {
+    mode          = "Automatic"
+    grace_minutes = 60
+  }
+}
+{% endif %}
+{% endif %}

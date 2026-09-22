@@ -1,0 +1,9 @@
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ '{{' }} ansible_playbook_python {{ '}}' }}"
+  vars:
+    project_name: "{{ project_name }}"
+    primary_region: "{{ primary_region }}"
+    environment: "production"

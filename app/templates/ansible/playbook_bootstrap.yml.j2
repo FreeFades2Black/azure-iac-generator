@@ -1,0 +1,113 @@
+---
+- name: "Azure SQL Schema Setup and Entra ID User Provisioning"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    sql_server: "{{ '{{' }} lookup('env', 'TF_VAR_sql_connection_endpoint') | default('sql-{{ project_name }}-prim.database.windows.net', true) {{ '}}' }}"
+    sql_database: "sqldb-{{ project_name }}"
+    app_msi_display_name: "{{ app_msi_display_name }}"
+    msi_client_id: "{{ '{{' }} lookup('env', 'AZURE_CLIENT_ID') | default('', true) {{ '}}' }}"
+
+  tasks:
+    - name: "Acquire OAuth2 access token for Azure SQL from local IMDS"
+      ansible.builtin.uri:
+        url: >-
+          http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fdatabase.windows.net%2F
+          {%- raw %}{%- if msi_client_id | length > 0 %}&client_id={{ msi_client_id }}{% endif %}{% endraw %}
+        method: GET
+        headers:
+          Metadata: "true"
+        return_content: true
+      register: imds_response
+      retries: 3
+      delay: 5
+      until: imds_response.status == 200
+
+    - name: "Store SQL bearer token"
+      ansible.builtin.set_fact:
+        azure_sql_token: "{{ '{{' }} imds_response.json.access_token {{ '}}' }}"
+      no_log: true
+
+    - name: "Wait for Azure SQL endpoint on port 1433"
+      ansible.builtin.wait_for:
+        host: "{{ '{{' }} sql_server {{ '}}' }}"
+        port: 1433
+        state: started
+        timeout: 180
+        delay: 5
+
+    - name: "Check if baseline schema exists"
+      ansible.builtin.command:
+        argv:
+          - /opt/mssql-tools18/bin/sqlcmd
+          - -S
+          - "{{ '{{' }} sql_server {{ '}}' }}"
+          - -d
+          - "{{ '{{' }} sql_database {{ '}}' }}"
+          - --authentication-method=ActiveDirectoryAccessToken
+          - -P
+          - "{{ '{{' }} azure_sql_token {{ '}}' }}"
+          - -C
+          - -Q
+          - "SET NOCOUNT ON; SELECT COUNT(*) FROM sys.tables WHERE name = 'schema_version';"
+      register: schema_check
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "Execute initial DDL migration"
+      ansible.builtin.command:
+        argv:
+          - /opt/mssql-tools18/bin/sqlcmd
+          - -S
+          - "{{ '{{' }} sql_server {{ '}}' }}"
+          - -d
+          - "{{ '{{' }} sql_database {{ '}}' }}"
+          - --authentication-method=ActiveDirectoryAccessToken
+          - -P
+          - "{{ '{{' }} azure_sql_token {{ '}}' }}"
+          - -C
+          - -i
+          - "files/V1__initial_schema.sql"
+      when: "'1' not in schema_check.stdout"
+      register: migration_output
+      changed_when: migration_output.rc == 0
+      no_log: true
+
+    - name: "Render external Entra user creation script"
+      ansible.builtin.copy:
+        dest: "/tmp/app_user_msi_provision.sql"
+        mode: "0600"
+        content: |
+          IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = N'{{ app_msi_display_name }}')
+          BEGIN
+              CREATE USER [{{ app_msi_display_name }}] FROM EXTERNAL PROVIDER;
+              ALTER ROLE db_datareader ADD MEMBER [{{ app_msi_display_name }}];
+              ALTER ROLE db_datawriter ADD MEMBER [{{ app_msi_display_name }}];
+              GRANT EXECUTE TO [{{ app_msi_display_name }}];
+          END;
+
+    - name: "Authorize workload Managed Identity inside Azure SQL"
+      ansible.builtin.command:
+        argv:
+          - /opt/mssql-tools18/bin/sqlcmd
+          - -S
+          - "{{ '{{' }} sql_server {{ '}}' }}"
+          - -d
+          - "{{ '{{' }} sql_database {{ '}}' }}"
+          - --authentication-method=ActiveDirectoryAccessToken
+          - -P
+          - "{{ '{{' }} azure_sql_token {{ '}}' }}"
+          - -C
+          - -i
+          - "/tmp/app_user_msi_provision.sql"
+      register: user_provision_output
+      changed_when: "'GRANT' in user_provision_output.stdout or user_provision_output.rc == 0"
+      no_log: true
+
+    - name: "Clean up provisioning script"
+      ansible.builtin.file:
+        path: "/tmp/app_user_msi_provision.sql"
+        state: absent

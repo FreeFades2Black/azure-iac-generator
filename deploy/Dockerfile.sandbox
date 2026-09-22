@@ -1,0 +1,55 @@
+# ==============================================================================
+# Isolated Sandbox Container for Offline Linting & Static Security Scanning
+# Target: deploy/Dockerfile.sandbox
+# ==============================================================================
+
+FROM python:3.11-slim
+
+LABEL maintainer="FreeFades2Black <free@local.omarchy>"
+LABEL description="Rootless containerized sandbox for Terraform fmt, Checkov security scans, and Ansible-lint"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/home/sandbox/.local/bin:${PATH}"
+
+# Install base dependencies and package repositories
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg \
+    lsb-release \
+    git \
+    unzip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install HashiCorp Terraform CLI
+RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list \
+    && apt-get update && apt-get install -y --no-install-recommends terraform \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create unprivileged sandbox user
+RUN useradd -m -u 1000 -s /bin/bash sandbox
+
+USER sandbox
+WORKDIR /home/sandbox
+
+# Install Python linters in user home
+RUN pip install --no-cache-dir --user \
+    checkov \
+    ansible \
+    ansible-lint
+
+WORKDIR /workspace
+
+# Default command: executes all checks sequentially against mounted /workspace
+CMD ["/bin/bash", "-c", "\
+    echo '=== 1. Terraform Format Check ===' && \
+    terraform -chdir=terraform fmt -check && \
+    echo '=== 2. Checkov Static Security Scan ===' && \
+    checkov -d terraform --framework terraform --compact --quiet && \
+    echo '=== 3. Ansible Playbook Lint ===' && \
+    ansible-lint ansible/playbook_bootstrap.yml && \
+    echo '=== ALL QUALITY GATES PASSED ==='\
+"]

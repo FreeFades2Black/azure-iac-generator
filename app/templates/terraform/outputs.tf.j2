@@ -1,0 +1,27 @@
+{% if enable_sql %}
+output "sql_connection_endpoint" {
+  description = "Target database connection string endpoint"
+{% if sql_redundancy == "failover_group" or sql_redundancy.value == "failover_group" %}
+  value       = "${azurerm_mssql_failover_group.sql_fog.name}.database.windows.net"
+{% else %}
+  value       = azurerm_mssql_server.sql_primary.fully_qualified_domain_name
+{% endif %}
+}
+{% endif %}
+
+output "storage_account_name" {
+  description = "Primary storage account name"
+  value       = azurerm_storage_account.storage.name
+}
+
+output "primary_resource_group" {
+  description = "Primary resource group name"
+  value       = azurerm_resource_group.rg_primary.name
+}
+
+{% if secondary_region %}
+output "secondary_resource_group" {
+  description = "Secondary resource group name"
+  value       = azurerm_resource_group.rg_secondary.name
+}
+{% endif %}

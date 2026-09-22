@@ -1,0 +1,244 @@
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.100"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+}
+
+# --- Base Primary Infrastructure ---
+resource "azurerm_resource_group" "rg_primary" {
+  name     = "rg-{{ project_name }}-{{ primary_region }}"
+  location = "{{ primary_region }}"
+  tags = {
+    Environment = "Production"
+    Redundancy  = "{{ redundancy.value if redundancy.value is defined else redundancy }}"
+  }
+}
+
+resource "azurerm_storage_account" "storage" {
+  name                      = "st{{ project_name }}data"
+  resource_group_name       = azurerm_resource_group.rg_primary.name
+  location                  = azurerm_resource_group.rg_primary.location
+  account_tier              = "Standard"
+  account_replication_type  = "{{ storage_replication_type }}"
+  min_tls_version           = "TLS1_2"
+  enable_https_traffic_only = true
+}
+
+resource "azurerm_virtual_network" "vnet_primary" {
+  name                = "vnet-{{ project_name }}-{{ primary_region }}"
+  location            = azurerm_resource_group.rg_primary.location
+  resource_group_name = azurerm_resource_group.rg_primary.name
+  address_space       = ["{{ primary_vnet_cidr }}"]
+}
+
+resource "azurerm_subnet" "subnet_primary" {
+  name                 = "snet-compute-{{ primary_region }}"
+  resource_group_name  = azurerm_resource_group.rg_primary.name
+  virtual_network_name = azurerm_virtual_network.vnet_primary.name
+  address_prefixes     = [cidrsubnet("{{ primary_vnet_cidr }}", 8, 1)]
+}
+
+# --- Compute Layer: LRS vs ZRS/GZRS ---
+{% if redundancy == "lrs" or redundancy.value == "lrs" %}
+resource "azurerm_linux_virtual_machine" "vm_standalone" {
+  name                  = "vm-{{ project_name }}-primary"
+  resource_group_name   = azurerm_resource_group.rg_primary.name
+  location              = azurerm_resource_group.rg_primary.location
+  size                  = "{{ vm_sku }}"
+  admin_username        = "azureuser"
+  network_interface_ids = [azurerm_network_interface.nic_primary.id]
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+}
+
+resource "azurerm_network_interface" "nic_primary" {
+  name                = "nic-{{ project_name }}-primary"
+  location            = azurerm_resource_group.rg_primary.location
+  resource_group_name = azurerm_resource_group.rg_primary.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.subnet_primary.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+{% else %}
+resource "azurerm_linux_virtual_machine_scale_set" "vmss_primary" {
+  name                = "vmss-{{ project_name }}-{{ primary_region }}"
+  resource_group_name = azurerm_resource_group.rg_primary.name
+  location            = azurerm_resource_group.rg_primary.location
+  sku                 = "{{ vm_sku }}"
+  instances           = 3
+  admin_username      = "azureuser"
+  zones               = ["1", "2", "3"]
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+
+  os_disk {
+    storage_account_type = "StandardSSD_ZRS"
+    caching              = "ReadWrite"
+  }
+
+  network_interface {
+    name    = "primary-nic"
+    primary = true
+
+    ip_configuration {
+      name      = "internal"
+      primary   = true
+      subnet_id = azurerm_subnet.subnet_primary.id
+    }
+  }
+}
+{% endif %}
+
+# --- Secondary Regional Stacks (GZRS or SQL Failover Group) ---
+{% if secondary_region %}
+resource "azurerm_resource_group" "rg_secondary" {
+  name     = "rg-{{ project_name }}-{{ secondary_region }}"
+  location = "{{ secondary_region }}"
+  tags = {
+    Environment = "Production"
+    Role        = "SecondaryStandby"
+  }
+}
+
+resource "azurerm_virtual_network" "vnet_secondary" {
+  name                = "vnet-{{ project_name }}-{{ secondary_region }}"
+  location            = azurerm_resource_group.rg_secondary.location
+  resource_group_name = azurerm_resource_group.rg_secondary.name
+  address_space       = ["{{ secondary_vnet_cidr }}"]
+}
+
+resource "azurerm_subnet" "subnet_secondary" {
+  name                 = "snet-compute-{{ secondary_region }}"
+  resource_group_name  = azurerm_resource_group.rg_secondary.name
+  virtual_network_name = azurerm_virtual_network.vnet_secondary.name
+  address_prefixes     = [cidrsubnet("{{ secondary_vnet_cidr }}", 8, 1)]
+}
+
+resource "azurerm_virtual_network_peering" "peer_primary_to_secondary" {
+  name                      = "peer-prim-to-sec"
+  resource_group_name       = azurerm_resource_group.rg_primary.name
+  virtual_network_name      = azurerm_virtual_network.vnet_primary.name
+  remote_virtual_network_id = azurerm_virtual_network.vnet_secondary.id
+}
+
+resource "azurerm_virtual_network_peering" "peer_secondary_to_primary" {
+  name                      = "peer-sec-to-prim"
+  resource_group_name       = azurerm_resource_group.rg_secondary.name
+  virtual_network_name      = azurerm_virtual_network.vnet_secondary.name
+  remote_virtual_network_id = azurerm_virtual_network.vnet_primary.id
+}
+{% endif %}
+
+# --- Azure SQL Layer ---
+{% if enable_sql %}
+resource "azurerm_user_assigned_identity" "sql_admin_id" {
+  name                = "id-sql-admin-{{ project_name }}"
+  resource_group_name = azurerm_resource_group.rg_primary.name
+  location            = azurerm_resource_group.rg_primary.location
+}
+
+resource "azurerm_mssql_server" "sql_primary" {
+  name                = "sql-{{ project_name }}-prim"
+  resource_group_name = azurerm_resource_group.rg_primary.name
+  location            = azurerm_resource_group.rg_primary.location
+  version             = "12.0"
+  minimum_tls_version = "1.2"
+
+  azuread_administrator {
+    login_username = azurerm_user_assigned_identity.sql_admin_id.name
+    object_id      = azurerm_user_assigned_identity.sql_admin_id.principal_id
+  }
+}
+
+resource "azurerm_mssql_database" "db_primary" {
+  name           = "sqldb-{{ project_name }}"
+  server_id      = azurerm_mssql_server.sql_primary.id
+  sku_name       = "{{ sql_sku }}"
+  collation      = "SQL_Latin1_General_CP1_CI_AS"
+  max_size_gb    = 128
+  zone_redundant = {{ 'true' if (sql_redundancy != 'local' and sql_redundancy.value != 'local') else 'false' }}
+}
+
+{% if sql_redundancy == "failover_group" or sql_redundancy.value == "failover_group" %}
+resource "azurerm_mssql_server" "sql_secondary" {
+  name                = "sql-{{ project_name }}-sec"
+  resource_group_name = azurerm_resource_group.rg_secondary.name
+  location            = azurerm_resource_group.rg_secondary.location
+  version             = "12.0"
+  minimum_tls_version = "1.2"
+
+  azuread_administrator {
+    login_username = azurerm_user_assigned_identity.sql_admin_id.name
+    object_id      = azurerm_user_assigned_identity.sql_admin_id.principal_id
+  }
+}
+
+resource "azurerm_mssql_failover_group" "sql_fog" {
+  name      = "fog-{{ project_name }}"
+  server_id = azurerm_mssql_server.sql_primary.id
+  databases = [azurerm_mssql_database.db_primary.id]
+
+  partner_server {
+    id = azurerm_mssql_server.sql_secondary.id
+  }
+
+  read_write_endpoint_failover_policy {
+    mode          = "Automatic"
+    grace_minutes = 60
+  }
+}
+{% endif %}
+
+output "sql_connection_endpoint" {
+  description = "Target database connection string endpoint"
+{% if sql_redundancy == "failover_group" or sql_redundancy.value == "failover_group" %}
+  value       = "${azurerm_mssql_failover_group.sql_fog.name}.database.windows.net"
+{% else %}
+  value       = azurerm_mssql_server.sql_primary.fully_qualified_domain_name
+{% endif %}
+}
+{% endif %}
