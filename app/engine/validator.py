@@ -100,23 +100,19 @@ class SecurityValidator:
 
         failed_checks = results.get("failed_checks", [])
 
-        # Filter for blocking CIS / High / Critical rules
+        # Filter for blocking CIS / High / Critical rules based on hard-fail-on configuration
         blocking_violations = []
         for check in failed_checks:
-            severity = check.get("severity", "UNKNOWN")
-            check_id = check.get("check_id")
-            check_name = check.get("check_name")
-            resource = check.get("resource")
-            guideline = check.get("guideline")
-
-            blocking_violations.append({
-                "check_id": check_id,
-                "check_name": check_name,
-                "severity": severity,
-                "resource": resource,
-                "guideline": guideline,
-                "file_path": check.get("file_path")
-            })
+            severity = str(check.get("severity") or "").upper()
+            if severity in ("HIGH", "CRITICAL") or (process.returncode != 0 and severity not in ("LOW", "INFO")):
+                blocking_violations.append({
+                    "check_id": check.get("check_id"),
+                    "check_name": check.get("check_name"),
+                    "severity": severity if severity else "HIGH",
+                    "resource": check.get("resource"),
+                    "guideline": check.get("guideline"),
+                    "file_path": check.get("file_path")
+                })
 
         if blocking_violations:
             summary_msg = (
