@@ -10,6 +10,7 @@ jobs:
   test:
     name: Test Suite & Validation Pipeline
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
